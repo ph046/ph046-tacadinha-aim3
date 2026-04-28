@@ -8,6 +8,7 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
+
     steps:
       - name: Checkout código
         uses: actions/checkout@v4
@@ -20,23 +21,27 @@ jobs:
 
       - name: Configurar Gradle
         uses: gradle/actions/setup-gradle@v3
-        with:
-          gradle-version: 8.7
+
+      - name: Dar permissão ao Gradle Wrapper
+        run: chmod +x ./gradlew
 
       - name: Aceitar licenças Android SDK
         run: yes | $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager --licenses || true
 
       - name: Instalar SDK necessário
-        run: $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager "platforms;android-34" "build-tools;34.0.0" || true
+        run: $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager "platforms;android-34" "build-tools;34.0.0"
 
       - name: Build APK Debug
-        run: gradle assembleDebug
+        run: ./gradlew assembleDebug --no-daemon
         env:
           ANDROID_HOME: /usr/local/lib/android/sdk
+
+      - name: Listar APK gerado
+        run: find . -name "*.apk"
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
           name: TacadinhaAim-APK
-          path: app/build/outputs/apk/debug/app-debug.apk
+          path: "**/build/outputs/apk/debug/*.apk"
           if-no-files-found: error
