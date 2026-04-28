@@ -34,14 +34,37 @@ jobs:
         run: $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager "platforms;android-34" "build-tools;34.0.0"
 
       - name: Build APK Debug
-        run: gradle :app:assembleDebug --stacktrace --info --no-daemon
+        run: |
+          set +e
+          gradle :app:assembleDebug --stacktrace --no-daemon --console=plain 2>&1 | tee build-log.txt
+          STATUS=${PIPESTATUS[0]}
+
+          echo ""
+          echo "======================================"
+          echo "ERRO REAL DO APP:"
+          echo "======================================"
+          grep -n -i -C 5 "e: \|error:\|unresolved reference\|expecting\|type mismatch\|compilation error\|failed for task" build-log.txt || true
+          echo "======================================"
+          echo "FIM DO ERRO REAL"
+          echo "======================================"
+
+          exit $STATUS
         env:
           ANDROID_HOME: /usr/local/lib/android/sdk
 
+      - name: Upload log do erro
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-log
+          path: build-log.txt
+
       - name: Procurar APK gerado
+        if: success()
         run: find . -name "*.apk"
 
       - name: Upload APK
+        if: success()
         uses: actions/upload-artifact@v4
         with:
           name: TacadinhaAim-APK
