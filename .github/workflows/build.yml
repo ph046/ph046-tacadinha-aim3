@@ -21,9 +21,11 @@ jobs:
 
       - name: Configurar Gradle
         uses: gradle/actions/setup-gradle@v3
+        with:
+          gradle-version: 8.7
 
-      - name: Dar permissão ao Gradle Wrapper
-        run: chmod +x ./gradlew
+      - name: Ver arquivos do projeto
+        run: ls -la
 
       - name: Aceitar licenças Android SDK
         run: yes | $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager --licenses || true
@@ -32,11 +34,11 @@ jobs:
         run: $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager "platforms;android-34" "build-tools;34.0.0"
 
       - name: Build APK Debug
-        run: ./gradlew assembleDebug --no-daemon
+        run: gradle assembleDebug --no-daemon
         env:
           ANDROID_HOME: /usr/local/lib/android/sdk
 
-      - name: Listar APK gerado
+      - name: Procurar APK gerado
         run: find . -name "*.apk"
 
       - name: Upload APK
