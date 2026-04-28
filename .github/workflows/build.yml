@@ -34,7 +34,7 @@ jobs:
         run: $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager "platforms;android-34" "build-tools;34.0.0"
 
       - name: Build APK Debug
-        run: gradle assembleDebug --no-daemon
+        run: gradle :app:assembleDebug --stacktrace --info --no-daemon
         env:
           ANDROID_HOME: /usr/local/lib/android/sdk
 
