@@ -706,4 +706,140 @@ class AimService : Service() {
                 tableRect.bottom.coerceAtMost(full.height)
             )
 
- 
+            if (safeRect.width() <= 10 || safeRect.height() <= 10) {
+                full.recycle()
+                return
+            }
+
+            val tableCrop = Bitmap.createBitmap(
+                full,
+                safeRect.left,
+                safeRect.top,
+                safeRect.width(),
+                safeRect.height()
+            )
+
+            full.recycle()
+
+            val scale = 0.22f
+            val smallW = (tableCrop.width * scale).toInt().coerceAtLeast(1)
+            val smallH = (tableCrop.height * scale).toInt().coerceAtLeast(1)
+
+            val small = Bitmap.createScaledBitmap(
+                tableCrop,
+                smallW,
+                smallH,
+                false
+            )
+
+            tableCrop.recycle()
+
+            val detector = LightBallDetector(
+                bmp = small,
+                cropRectOriginal = safeRect,
+                scaleInv = 1f / scale
+            )
+
+            val cueBall = detector.findCueBall()
+            val balls = detector.findColoredBalls(cueBall)
+
+            val pockets = TableCalibration.pockets(
+                screenW.toFloat(),
+                screenH.toFloat()
+            )
+
+            val bestLine = AutoAimCalculator.bestShot(
+                cueBall = cueBall,
+                balls = balls,
+                pockets = pockets
+            )
+
+            val aimData = AimData(
+                cueBall = cueBall,
+                balls = balls,
+                pockets = pockets,
+                bestLine = bestLine
+            )
+
+            handler.post {
+                overlayView?.update(aimData)
+            }
+
+            small.recycle()
+
+        } catch (e: Exception) {
+            e.printStackTrace()
+
+            try {
+                if (!full.isRecycled) {
+                    full.recycle()
+                }
+            } catch (_: Exception) {
+            }
+        }
+    }
+
+    private fun buildNotification() =
+        NotificationCompat.Builder(this, CHANNEL_ID)
+            .setContentTitle("Tacadinha Aim")
+            .setContentText("Analisando mesa e desenhando mira")
+            .setSmallIcon(android.R.drawable.ic_menu_compass)
+            .setPriority(NotificationCompat.PRIORITY_LOW)
+            .build()
+
+    private fun createNotificationChannel() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            val channel = NotificationChannel(
+                CHANNEL_ID,
+                "Tacadinha Aim",
+                NotificationManager.IMPORTANCE_LOW
+            )
+
+            val manager = getSystemService(NotificationManager::class.java)
+            manager.createNotificationChannel(channel)
+        }
+    }
+
+    override fun onDestroy() {
+        handler.removeCallbacks(captureRunnable)
+
+        try {
+            overlayView?.let {
+                windowManager.removeView(it)
+            }
+        } catch (_: Exception) {
+        }
+
+        overlayView = null
+
+        try {
+            virtualDisplay?.release()
+        } catch (_: Exception) {
+        }
+
+        virtualDisplay = null
+
+        try {
+            imageReader?.close()
+        } catch (_: Exception) {
+        }
+
+        imageReader = null
+
+        try {
+            mediaProjection?.unregisterCallback(projectionCallback)
+        } catch (_: Exception) {
+        }
+
+        try {
+            mediaProjection?.stop()
+        } catch (_: Exception) {
+        }
+
+        mediaProjection = null
+
+        super.onDestroy()
+    }
+
+    override fun onBind(intent: Intent?) = null
+}
