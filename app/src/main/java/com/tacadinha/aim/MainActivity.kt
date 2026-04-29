@@ -2,7 +2,6 @@ package com.tacadinha.aim
 
 import android.Manifest
 import android.app.Activity
-import android.content.ComponentName
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.media.projection.MediaProjectionConfig
@@ -44,42 +43,17 @@ class MainActivity : AppCompatActivity() {
 
         findViewById<Button>(R.id.btnStop).setOnClickListener {
             stopService(Intent(this, AimService::class.java))
-            statusText.text = "❌ Mira desativada"
+            statusText.text = "❌ Coach desativado"
             statusText.setTextColor(0xFFFF4444.toInt())
         }
 
-        updateStatus()
-    }
-
-    override fun onResume() {
-        super.onResume()
-        updateStatus()
-    }
-
-    private fun updateStatus() {
-        if (isAccessibilityServiceEnabled()) {
-            statusText.text = "✅ Acessibilidade ativa. Pronto para iniciar."
-            statusText.setTextColor(0xFF00FF88.toInt())
-        } else {
-            statusText.text = "⚠️ Ative a acessibilidade primeiro"
-            statusText.setTextColor(0xFFFFCC00.toInt())
-        }
+        statusText.text = "✅ Pronto para iniciar"
+        statusText.setTextColor(0xFF00FF88.toInt())
     }
 
     private fun checkPermissionsAndStart() {
-        if (!isAccessibilityServiceEnabled()) {
-            Toast.makeText(
-                this,
-                "Ative o Tacadinha Aim na acessibilidade.",
-                Toast.LENGTH_LONG
-            ).show()
-
-            startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
-            return
-        }
-
         if (!Settings.canDrawOverlays(this)) {
-            statusText.text = "⚠️ Conceda permissão de sobreposição..."
+            statusText.text = "⚠️ Conceda permissão de sobreposição"
 
             val intent = Intent(
                 Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
@@ -105,28 +79,7 @@ class MainActivity : AppCompatActivity() {
                 projectionManager.createScreenCaptureIntent()
             }
 
-        startActivityForResult(
-            captureIntent,
-            REQUEST_MEDIA_PROJECTION
-        )
-    }
-
-    private fun isAccessibilityServiceEnabled(): Boolean {
-        val expectedComponentName = ComponentName(
-            this,
-            AimAccessibilityService::class.java
-        )
-
-        val enabledServices = Settings.Secure.getString(
-            contentResolver,
-            Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES
-        ) ?: return false
-
-        val expected = expectedComponentName.flattenToString()
-
-        return enabledServices
-            .split(":")
-            .any { it.equals(expected, ignoreCase = true) }
+        startActivityForResult(captureIntent, REQUEST_MEDIA_PROJECTION)
     }
 
     private fun requestNotificationPermissionIfNeeded() {
@@ -153,11 +106,11 @@ class MainActivity : AppCompatActivity() {
         when (requestCode) {
             REQUEST_OVERLAY -> {
                 if (Settings.canDrawOverlays(this)) {
-                    checkPermissionsAndStart()
+                    requestScreenCapture()
                 } else {
                     Toast.makeText(
                         this,
-                        "Permissão de sobreposição necessária para funcionar.",
+                        "Permissão de sobreposição é necessária.",
                         Toast.LENGTH_LONG
                     ).show()
                 }
@@ -176,12 +129,12 @@ class MainActivity : AppCompatActivity() {
                         startService(serviceIntent)
                     }
 
-                    statusText.text = "✅ Mira ATIVA! Abra seu jogo."
+                    statusText.text = "✅ Coach ATIVO! Abra o jogo."
                     statusText.setTextColor(0xFF00FF88.toInt())
 
                     Toast.makeText(
                         this,
-                        "Mira ativada! Volte para o jogo.",
+                        "Coach ativado. Volte para o jogo.",
                         Toast.LENGTH_LONG
                     ).show()
 
@@ -189,12 +142,6 @@ class MainActivity : AppCompatActivity() {
                 } else {
                     statusText.text = "⚠️ Permissão de captura negada"
                     statusText.setTextColor(0xFFFFCC00.toInt())
-
-                    Toast.makeText(
-                        this,
-                        "Permissão de captura negada.",
-                        Toast.LENGTH_SHORT
-                    ).show()
                 }
             }
         }
