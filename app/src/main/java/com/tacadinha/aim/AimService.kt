@@ -187,7 +187,8 @@ class LightBallDetector(
                 val ball = clusterToBall(cluster, false) ?: continue
 
                 val tooCloseToCue = cueBall != null &&
-                    hypot(ball.x - cueBall.x, ball.y - cueBall.y) < ball.radius + cueBall.radius + 8f
+                    hypot(ball.x - cueBall.x, ball.y - cueBall.y) <
+                    ball.radius + cueBall.radius + 8f
 
                 val duplicate = result.any {
                     hypot(ball.x - it.x, ball.y - it.y) < 22f
@@ -417,6 +418,12 @@ class AutoAimOverlayView(context: Context) : View(context) {
         style = Paint.Style.STROKE
     }
 
+    private val ballPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = Color.argb(230, 255, 220, 0)
+        strokeWidth = 4f
+        style = Paint.Style.STROKE
+    }
+
     private val aimPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         color = Color.argb(235, 0, 255, 70)
         strokeWidth = 6f
@@ -460,16 +467,20 @@ class AutoAimOverlayView(context: Context) : View(context) {
 
     override fun onDraw(canvas: Canvas) {
         val d = data ?: return
-        val line = d.bestLine ?: return
 
         for (pocket in d.pockets) {
             canvas.drawCircle(pocket.x, pocket.y, 13f, pocketPaint)
+        }
+
+        for (ball in d.balls) {
+            canvas.drawCircle(ball.x, ball.y, ball.radius + 5f, ballPaint)
         }
 
         d.cueBall?.let {
             canvas.drawCircle(it.x, it.y, it.radius + 7f, cuePaint)
         }
 
+        val line = d.bestLine ?: return
         val linePaint = if (line.clear) aimPaint else blockedPaint
 
         canvas.drawLine(
@@ -516,6 +527,13 @@ class AimService : Service() {
 
     private val handler = Handler(Looper.getMainLooper())
 
+    private val projectionCallback = object : MediaProjection.Callback() {
+        override fun onStop() {
+            super.onStop()
+            stopSelf()
+        }
+    }
+
     private val captureRunnable = object : Runnable {
         override fun run() {
             captureAndProcess()
@@ -554,11 +572,13 @@ class AimService : Service() {
             return START_NOT_STICKY
         }
 
-        val data: Intent = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+        val dataIntent: Intent? = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             serviceIntent.getParcelableExtra(EXTRA_DATA, Intent::class.java)
         } else {
             serviceIntent.getParcelableExtra(EXTRA_DATA)
-        } ?: run {
+        }
+
+        val data = dataIntent ?: run {
             stopSelf()
             return START_NOT_STICKY
         }
@@ -569,6 +589,11 @@ class AimService : Service() {
             getSystemService(MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
 
         mediaProjection = projectionManager.getMediaProjection(resultCode, data)
+
+        mediaProjection?.registerCallback(
+            projectionCallback,
+            handler
+        )
 
         imageReader = ImageReader.newInstance(
             screenW,
@@ -585,7 +610,7 @@ class AimService : Service() {
             DisplayManager.VIRTUAL_DISPLAY_FLAG_AUTO_MIRROR,
             imageReader?.surface,
             null,
-            null
+            handler
         )
 
         addOverlay()
@@ -632,29 +657,41 @@ class AimService : Service() {
             val plane = image.planes[0]
             val rowStride = plane.rowStride
             val pixelStride = plane.pixelStride
+
+            if (pixelStride <= 0 || rowStride <= 0) return
+
             val bitmapW = rowStride / pixelStride
+            val imageW = image.width
+            val imageH = image.height
 
             val raw = Bitmap.createBitmap(
                 bitmapW,
-                screenH,
+                imageH,
                 Bitmap.Config.ARGB_8888
             )
 
             raw.copyPixelsFromBuffer(plane.buffer)
 
-            val full = if (bitmapW != screenW) {
-                Bitmap.createBitmap(raw, 0, 0, screenW, screenH).also {
+            val full = if (bitmapW != imageW) {
+                Bitmap.createBitmap(raw, 0, 0, imageW, imageH).also {
                     raw.recycle()
                 }
             } else {
                 raw
             }
 
+            screenW = full.width
+            screenH = full.height
+
             processFrame(full)
+
         } catch (e: Exception) {
             e.printStackTrace()
         } finally {
-            image.close()
+            try {
+                image.close()
+            } catch (_: Exception) {
+            }
         }
     }
 
@@ -669,35 +706,4 @@ class AimService : Service() {
                 tableRect.bottom.coerceAtMost(full.height)
             )
 
-            if (safeRect.width() <= 10 || safeRect.height() <= 10) return
-
-            val tableCrop = Bitmap.createBitmap(
-                full,
-                safeRect.left,
-                safeRect.top,
-                safeRect.width(),
-                safeRect.height()
-            )
-
-            full.recycle()
-
-            val scale = 0.22f
-            val smallW = (tableCrop.width * scale).toInt().coerceAtLeast(1)
-            val smallH = (tableCrop.height * scale).toInt().coerceAtLeast(1)
-
-            val small = Bitmap.createScaledBitmap(
-                tableCrop,
-                smallW,
-                smallH,
-                false
-            )
-
-            tableCrop.recycle()
-
-            val detector = LightBallDetector(
-                bmp = small,
-                cropRectOriginal = safeRect,
-                scaleInv = 1f / scale
-            )
-
-            val cueBall = detector.findC
+ 
