@@ -1,4 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">Tacadinha Aim</string>
+
+    <string name="accessibility_label">Tacadinha Aim</string>
+
+    <string name="accessibility_desc">Permite ao Tacadinha Aim usar acessibilidade para executar gestos de mira na tela.</string>
 </resources>
