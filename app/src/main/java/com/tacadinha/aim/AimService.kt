@@ -80,11 +80,12 @@ object TableCalibration {
         val landscape = screenW > screenH
 
         return if (landscape) {
+            // Calibrado para a mesa do Tacadinha do seu print
             Rect(
-                (screenW * 0.125f).toInt(),
-                (screenH * 0.105f).toInt(),
-                (screenW * 0.885f).toInt(),
-                (screenH * 0.795f).toInt()
+                (screenW * 0.248f).toInt(), // esquerda
+                (screenH * 0.215f).toInt(), // topo
+                (screenW * 0.755f).toInt(), // direita
+                (screenH * 0.865f).toInt()  // baixo
             )
         } else {
             Rect(
@@ -96,18 +97,18 @@ object TableCalibration {
         }
     }
 
-    fun pockets(screenW: Float, screenH: Float): List<PocketPos> {
+     fun pockets(screenW: Float, screenH: Float): List<PocketPos> {
         val landscape = screenW > screenH
 
         return if (landscape) {
             listOf(
-                PocketPos(screenW * 0.130f, screenH * 0.122f),
-                PocketPos(screenW * 0.505f, screenH * 0.097f),
-                PocketPos(screenW * 0.878f, screenH * 0.122f),
+                PocketPos(screenW * 0.275f, screenH * 0.280f),
+                PocketPos(screenW * 0.501f, screenH * 0.268f),
+                PocketPos(screenW * 0.729f, screenH * 0.280f),
 
-                PocketPos(screenW * 0.130f, screenH * 0.781f),
-                PocketPos(screenW * 0.505f, screenH * 0.787f),
-                PocketPos(screenW * 0.878f, screenH * 0.781f)
+                PocketPos(screenW * 0.275f, screenH * 0.798f),
+                PocketPos(screenW * 0.501f, screenH * 0.814f),
+                PocketPos(screenW * 0.729f, screenH * 0.798f)
             )
         } else {
             listOf(
@@ -122,6 +123,7 @@ object TableCalibration {
         }
     }
 }
+
 
 class LightBallDetector(
     private val bmp: Bitmap,
