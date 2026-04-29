@@ -765,6 +765,21 @@ class AimService : Service() {
                 overlayView?.update(aimData)
             }
 
+            if (bestLine != null && bestLine.clear) {
+                val angle = kotlin.math.atan2(
+                    (bestLine.ghostY - bestLine.cueY).toDouble(),
+                    (bestLine.ghostX - bestLine.cueX).toDouble()
+                )
+
+                handler.post {
+                    AimAccessibilityService.instance?.aimCue(
+                        bestLine.cueX,
+                        bestLine.cueY,
+                        angle
+                    )
+                }
+            }
+
             small.recycle()
 
         } catch (e: Exception) {
