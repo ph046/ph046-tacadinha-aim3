@@ -20,6 +20,7 @@ import android.media.projection.MediaProjection
 import android.media.projection.MediaProjectionManager
 import android.os.Build
 import android.os.Handler
+import android.os.HandlerThread
 import android.os.Looper
 import android.os.SystemClock
 import android.util.DisplayMetrics
@@ -27,9 +28,12 @@ import android.view.View
 import android.view.WindowManager
 import androidx.core.app.NotificationCompat
 import kotlin.math.abs
+import kotlin.math.atan2
+import kotlin.math.cos
 import kotlin.math.hypot
 import kotlin.math.max
 import kotlin.math.min
+import kotlin.math.sin
 import kotlin.math.sqrt
 
 data class BallPos(
@@ -47,12 +51,19 @@ data class PocketPos(
 data class AimLine(
     val cueX: Float,
     val cueY: Float,
+
     val ghostX: Float,
     val ghostY: Float,
+
+    val contactX: Float,
+    val contactY: Float,
+
     val targetX: Float,
     val targetY: Float,
+
     val pocketX: Float,
     val pocketY: Float,
+
     val clear: Boolean
 )
 
@@ -64,25 +75,51 @@ data class AimData(
 )
 
 object TableCalibration {
+
     fun tableRect(screenW: Int, screenH: Int): Rect {
-        return Rect(
-            (screenW * 0.130f).toInt(),
-            (screenH * 0.105f).toInt(),
-            (screenW * 0.880f).toInt(),
-            (screenH * 0.790f).toInt()
-        )
+        val landscape = screenW > screenH
+
+        return if (landscape) {
+            Rect(
+                (screenW * 0.125f).toInt(),
+                (screenH * 0.105f).toInt(),
+                (screenW * 0.885f).toInt(),
+                (screenH * 0.795f).toInt()
+            )
+        } else {
+            Rect(
+                (screenW * 0.060f).toInt(),
+                (screenH * 0.180f).toInt(),
+                (screenW * 0.940f).toInt(),
+                (screenH * 0.780f).toInt()
+            )
+        }
     }
 
     fun pockets(screenW: Float, screenH: Float): List<PocketPos> {
-        return listOf(
-            PocketPos(screenW * 0.130f, screenH * 0.122f),
-            PocketPos(screenW * 0.505f, screenH * 0.095f),
-            PocketPos(screenW * 0.878f, screenH * 0.122f),
+        val landscape = screenW > screenH
 
-            PocketPos(screenW * 0.130f, screenH * 0.781f),
-            PocketPos(screenW * 0.505f, screenH * 0.787f),
-            PocketPos(screenW * 0.878f, screenH * 0.781f)
-        )
+        return if (landscape) {
+            listOf(
+                PocketPos(screenW * 0.130f, screenH * 0.122f),
+                PocketPos(screenW * 0.505f, screenH * 0.097f),
+                PocketPos(screenW * 0.878f, screenH * 0.122f),
+
+                PocketPos(screenW * 0.130f, screenH * 0.781f),
+                PocketPos(screenW * 0.505f, screenH * 0.787f),
+                PocketPos(screenW * 0.878f, screenH * 0.781f)
+            )
+        } else {
+            listOf(
+                PocketPos(screenW * 0.070f, screenH * 0.190f),
+                PocketPos(screenW * 0.500f, screenH * 0.175f),
+                PocketPos(screenW * 0.930f, screenH * 0.190f),
+
+                PocketPos(screenW * 0.070f, screenH * 0.770f),
+                PocketPos(screenW * 0.500f, screenH * 0.785f),
+                PocketPos(screenW * 0.930f, screenH * 0.770f)
+            )
+        }
     }
 }
 
@@ -96,12 +133,16 @@ class LightBallDetector(
 
     companion object {
         fun isTableGreen(r: Int, g: Int, b: Int): Boolean {
-            return g > 70 && g > r + 18 && g > b + 18
+            return g > 65 && g > r + 14 && g > b + 14
         }
 
         fun isWhiteBall(r: Int, g: Int, b: Int): Boolean {
-            val bright = r > 175 && g > 175 && b > 175
-            val balanced = abs(r - g) < 35 && abs(r - b) < 35 && abs(g - b) < 35
+            val mx = max(r, max(g, b))
+            val mn = min(r, min(g, b))
+
+            val bright = mx > 165 && mn > 130
+            val balanced = abs(r - g) < 45 && abs(r - b) < 50 && abs(g - b) < 45
+
             return bright && balanced
         }
 
@@ -113,7 +154,10 @@ class LightBallDetector(
             val mn = min(r, min(g, b))
             val saturation = if (mx == 0) 0f else (mx - mn).toFloat() / mx.toFloat()
 
-            return (mx > 45 && saturation > 0.22f) || (mx < 65 && mn < 50)
+            val colorful = mx > 55 && saturation > 0.20f
+            val blackBall = mx < 78 && mn < 60
+
+            return colorful || blackBall
         }
     }
 
@@ -134,12 +178,16 @@ class LightBallDetector(
                 start = i,
                 pixels = pixels,
                 visited = visited,
-                maxSize = 900
+                maxSize = 1000
             ) { color ->
-                isWhiteBall(Color.red(color), Color.green(color), Color.blue(color))
+                isWhiteBall(
+                    Color.red(color),
+                    Color.green(color),
+                    Color.blue(color)
+                )
             }
 
-            if (cluster.size in 10..900) {
+            if (isBallCluster(cluster)) {
                 if (bestCluster == null || cluster.size > bestCluster!!.size) {
                     bestCluster = cluster
                 }
@@ -170,7 +218,7 @@ class LightBallDetector(
                 start = i,
                 pixels = pixels,
                 visited = visited,
-                maxSize = 900
+                maxSize = 1000
             ) { color ->
                 val r = Color.red(color)
                 val g = Color.green(color)
@@ -179,28 +227,81 @@ class LightBallDetector(
                 if (!isColoredBall(r, g, b)) {
                     false
                 } else {
-                    abs(r - seedR) < 85 && abs(g - seedG) < 85 && abs(b - seedB) < 85
+                    abs(r - seedR) < 90 &&
+                            abs(g - seedG) < 90 &&
+                            abs(b - seedB) < 90
                 }
             }
 
-            if (cluster.size in 10..900) {
+            if (isBallCluster(cluster)) {
                 val ball = clusterToBall(cluster, false) ?: continue
 
                 val tooCloseToCue = cueBall != null &&
-                    hypot(ball.x - cueBall.x, ball.y - cueBall.y) <
-                    ball.radius + cueBall.radius + 8f
+                        hypot(ball.x - cueBall.x, ball.y - cueBall.y) <
+                        ball.radius + cueBall.radius + 8f
 
                 val duplicate = result.any {
-                    hypot(ball.x - it.x, ball.y - it.y) < 22f
+                    hypot(ball.x - it.x, ball.y - it.y) < max(ball.radius, it.radius) * 1.35f
                 }
 
-                if (!tooCloseToCue && !duplicate) {
+                val nearPocket = isNearTablePocket(ball)
+
+                if (!tooCloseToCue && !duplicate && !nearPocket) {
                     result.add(ball)
                 }
             }
         }
 
         return result
+            .sortedByDescending { it.radius }
+            .take(16)
+    }
+
+    private fun isNearTablePocket(ball: BallPos): Boolean {
+        val x = ball.x
+        val y = ball.y
+
+        val left = cropRectOriginal.left.toFloat()
+        val right = cropRectOriginal.right.toFloat()
+        val top = cropRectOriginal.top.toFloat()
+        val bottom = cropRectOriginal.bottom.toFloat()
+
+        val margin = 45f
+
+        val nearLeft = abs(x - left) < margin
+        val nearRight = abs(x - right) < margin
+        val nearTop = abs(y - top) < margin
+        val nearBottom = abs(y - bottom) < margin
+
+        return (nearLeft || nearRight) && (nearTop || nearBottom)
+    }
+
+    private fun isBallCluster(cluster: MutableList<Int>): Boolean {
+        if (cluster.size !in 8..1000) return false
+
+        var minX = w
+        var maxX = 0
+        var minY = h
+        var maxY = 0
+
+        for (idx in cluster) {
+            val x = idx % w
+            val y = idx / w
+
+            if (x < minX) minX = x
+            if (x > maxX) maxX = x
+            if (y < minY) minY = y
+            if (y > maxY) maxY = y
+        }
+
+        val cw = maxX - minX + 1
+        val ch = maxY - minY + 1
+
+        if (cw < 2 || ch < 2) return false
+
+        val ratio = cw.toFloat() / ch.toFloat().coerceAtLeast(1f)
+
+        return ratio in 0.45f..2.2f
     }
 
     private fun floodFill(
@@ -243,31 +344,56 @@ class LightBallDetector(
         var sx = 0f
         var sy = 0f
 
+        var minX = w
+        var maxX = 0
+        var minY = h
+        var maxY = 0
+
         for (idx in cluster) {
-            sx += (idx % w).toFloat()
-            sy += (idx / w).toFloat()
+            val x = idx % w
+            val y = idx / w
+
+            sx += x.toFloat()
+            sy += y.toFloat()
+
+            if (x < minX) minX = x
+            if (x > maxX) maxX = x
+            if (y < minY) minY = y
+            if (y > maxY) maxY = y
         }
 
-        val localX = sx / cluster.size
-        val localY = sy / cluster.size
+        val centroidX = sx / cluster.size
+        val centroidY = sy / cluster.size
+
+        val boxCenterX = (minX + maxX) / 2f
+        val boxCenterY = (minY + maxY) / 2f
+
+        val localX = boxCenterX * 0.65f + centroidX * 0.35f
+        val localY = boxCenterY * 0.65f + centroidY * 0.35f
 
         val originalX = cropRectOriginal.left + localX * scaleInv
         val originalY = cropRectOriginal.top + localY * scaleInv
 
-        val estimatedRadius = (sqrt(cluster.size / Math.PI.toFloat()) * scaleInv)
-            .coerceIn(10f, 24f)
+        val bw = (maxX - minX + 1) * scaleInv
+        val bh = (maxY - minY + 1) * scaleInv
+
+        val radiusByBox = ((bw + bh) / 4f).coerceIn(8f, 28f)
+        val radiusByArea = (sqrt(cluster.size / Math.PI.toFloat()) * scaleInv).coerceIn(8f, 28f)
+
+        val estimatedRadius = radiusByBox * 0.72f + radiusByArea * 0.28f
 
         return BallPos(originalX, originalY, estimatedRadius, isCue)
     }
 }
 
 object AutoAimCalculator {
+
     fun bestShot(
         cueBall: BallPos?,
         balls: List<BallPos>,
         pockets: List<PocketPos>
     ): AimLine? {
-        if (cueBall == null || balls.isEmpty()) return null
+        if (cueBall == null || balls.isEmpty() || pockets.isEmpty()) return null
 
         var bestScore = Float.NEGATIVE_INFINITY
         var bestLine: AimLine? = null
@@ -279,10 +405,15 @@ object AutoAimCalculator {
                 val cueToGhost = hypot(line.ghostX - cueBall.x, line.ghostY - cueBall.y)
                 val ballToPocket = hypot(ball.x - pocket.x, ball.y - pocket.y)
 
-                val anglePenalty = anglePenalty(cueBall, ball, pocket)
-                val blockedPenalty = if (line.clear) 0f else 900f
+                val cutPenalty = cutAnglePenalty(cueBall, ball, pocket)
+                val blockedPenalty = if (line.clear) 0f else 5000f
 
-                val score = 5000f - cueToGhost - ballToPocket - anglePenalty - blockedPenalty
+                val score =
+                    8000f -
+                            cueToGhost * 0.85f -
+                            ballToPocket * 0.65f -
+                            cutPenalty -
+                            blockedPenalty
 
                 if (score > bestScore) {
                     bestScore = score
@@ -304,65 +435,94 @@ object AutoAimCalculator {
         val ty = pocket.y - target.y
         val targetToPocket = hypot(tx, ty)
 
-        if (targetToPocket < 10f) return null
+        if (targetToPocket < 20f) return null
 
         val nx = tx / targetToPocket
         val ny = ty / targetToPocket
 
-        val contactDistance = cueBall.radius + target.radius
-        val ghostX = target.x - nx * contactDistance
-        val ghostY = target.y - ny * contactDistance
+        val contactX = target.x - nx * target.radius
+        val contactY = target.y - ny * target.radius
+
+        val ghostDistance = cueBall.radius + target.radius
+        val ghostX = target.x - nx * ghostDistance
+        val ghostY = target.y - ny * ghostDistance
 
         val cueToGhost = hypot(ghostX - cueBall.x, ghostY - cueBall.y)
-        if (cueToGhost < 10f) return null
+        if (cueToGhost < cueBall.radius * 2f) return null
+
+        val cutPenalty = cutAnglePenalty(cueBall, target, pocket)
+        if (cutPenalty > 3500f) return null
 
         val pathBlocked = isPathBlocked(
-            cueBall.x,
-            cueBall.y,
-            ghostX,
-            ghostY,
-            allBalls,
+            x1 = cueBall.x,
+            y1 = cueBall.y,
+            x2 = ghostX,
+            y2 = ghostY,
+            balls = allBalls,
             ignore = target,
-            radiusMargin = cueBall.radius * 0.85f
+            radiusMargin = cueBall.radius * 1.05f
         )
 
         val pocketBlocked = isPathBlocked(
-            target.x,
-            target.y,
-            pocket.x,
-            pocket.y,
-            allBalls,
+            x1 = target.x,
+            y1 = target.y,
+            x2 = pocket.x,
+            y2 = pocket.y,
+            balls = allBalls,
             ignore = target,
-            radiusMargin = target.radius * 0.85f
+            radiusMargin = target.radius * 0.95f
         )
 
         return AimLine(
             cueX = cueBall.x,
             cueY = cueBall.y,
+
             ghostX = ghostX,
             ghostY = ghostY,
+
+            contactX = contactX,
+            contactY = contactY,
+
             targetX = target.x,
             targetY = target.y,
+
             pocketX = pocket.x,
             pocketY = pocket.y,
+
             clear = !pathBlocked && !pocketBlocked
         )
     }
 
-    private fun anglePenalty(cueBall: BallPos, target: BallPos, pocket: PocketPos): Float {
-        val ax = target.x - cueBall.x
-        val ay = target.y - cueBall.y
-        val bx = pocket.x - target.x
-        val by = pocket.y - target.y
+    private fun cutAnglePenalty(cueBall: BallPos, target: BallPos, pocket: PocketPos): Float {
+        val a1 = atan2(
+            (target.y - cueBall.y).toDouble(),
+            (target.x - cueBall.x).toDouble()
+        )
 
-        val la = hypot(ax, ay)
-        val lb = hypot(bx, by)
+        val a2 = atan2(
+            (pocket.y - target.y).toDouble(),
+            (pocket.x - target.x).toDouble()
+        )
 
-        if (la < 1f || lb < 1f) return 1000f
+        val diff = angleDiff(a1, a2)
+        val deg = Math.toDegrees(diff).toFloat()
 
-        val dot = ((ax / la) * (bx / lb) + (ay / la) * (by / lb)).coerceIn(-1f, 1f)
+        return when {
+            deg <= 15f -> deg * 25f
+            deg <= 35f -> 500f + deg * 55f
+            deg <= 55f -> 1600f + deg * 85f
+            else -> 5000f
+        }
+    }
 
-        return (1f - dot) * 900f
+    private fun angleDiff(a: Double, b: Double): Double {
+        var diff = abs(a - b)
+
+        while (diff > Math.PI) {
+            diff = abs(diff - Math.PI * 2.0)
+        }
+
+        return diff
     }
 
     private fun isPathBlocked(
@@ -401,7 +561,9 @@ object AutoAimCalculator {
 
         if (lengthSq <= 0.0001f) return hypot(px - x1, py - y1)
 
-        val t = (((px - x1) * dx + (py - y1) * dy) / lengthSq).coerceIn(0f, 1f)
+        val t = (((px - x1) * dx + (py - y1) * dy) / lengthSq)
+            .coerceIn(0f, 1f)
+
         val cx = x1 + t * dx
         val cy = y1 + t * dy
 
@@ -412,51 +574,44 @@ object AutoAimCalculator {
 class AutoAimOverlayView(context: Context) : View(context) {
     private var data: AimData? = null
 
-    private val cuePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        color = Color.argb(230, 255, 255, 255)
-        strokeWidth = 5f
+    private val cueToHitPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = Color.argb(240, 0, 255, 80)
+        strokeWidth = 7f
         style = Paint.Style.STROKE
+        pathEffect = DashPathEffect(floatArrayOf(34f, 14f), 0f)
     }
 
-    private val ballPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        color = Color.argb(230, 255, 220, 0)
-        strokeWidth = 4f
-        style = Paint.Style.STROKE
-    }
-
-    private val aimPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        color = Color.argb(235, 0, 255, 70)
+    private val targetToPocketPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = Color.argb(245, 255, 220, 0)
         strokeWidth = 6f
         style = Paint.Style.STROKE
-        pathEffect = DashPathEffect(floatArrayOf(28f, 12f), 0f)
     }
 
     private val blockedPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        color = Color.argb(220, 255, 50, 50)
-        strokeWidth = 5f
+        color = Color.argb(235, 255, 50, 50)
+        strokeWidth = 7f
         style = Paint.Style.STROKE
-        pathEffect = DashPathEffect(floatArrayOf(18f, 12f), 0f)
-    }
-
-    private val pocketLinePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        color = Color.argb(235, 255, 220, 0)
-        strokeWidth = 5f
-        style = Paint.Style.STROKE
+        pathEffect = DashPathEffect(floatArrayOf(22f, 14f), 0f)
     }
 
     private val ghostPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        color = Color.argb(110, 0, 255, 70)
+        color = Color.argb(90, 0, 255, 80)
         style = Paint.Style.FILL
     }
 
     private val ghostBorderPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        color = Color.argb(230, 0, 255, 70)
+        color = Color.argb(240, 0, 255, 80)
         strokeWidth = 4f
         style = Paint.Style.STROKE
     }
 
+    private val contactPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = Color.argb(255, 255, 60, 60)
+        style = Paint.Style.FILL
+    }
+
     private val pocketPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        color = Color.argb(130, 255, 170, 0)
+        color = Color.argb(180, 255, 220, 0)
         style = Paint.Style.FILL
     }
 
@@ -466,40 +621,52 @@ class AutoAimOverlayView(context: Context) : View(context) {
     }
 
     override fun onDraw(canvas: Canvas) {
-        val d = data ?: return
+        val line = data?.bestLine ?: return
 
-        for (pocket in d.pockets) {
-            canvas.drawCircle(pocket.x, pocket.y, 13f, pocketPaint)
-        }
+        val mainPaint = if (line.clear) cueToHitPaint else blockedPaint
 
-        for (ball in d.balls) {
-            canvas.drawCircle(ball.x, ball.y, ball.radius + 5f, ballPaint)
-        }
-
-        d.cueBall?.let {
-            canvas.drawCircle(it.x, it.y, it.radius + 7f, cuePaint)
-        }
-
-        val line = d.bestLine ?: return
-        val linePaint = if (line.clear) aimPaint else blockedPaint
+        canvas.drawCircle(
+            line.pocketX,
+            line.pocketY,
+            16f,
+            pocketPaint
+        )
 
         canvas.drawLine(
             line.cueX,
             line.cueY,
             line.ghostX,
             line.ghostY,
-            linePaint
+            mainPaint
         )
 
-        canvas.drawCircle(line.ghostX, line.ghostY, 17f, ghostPaint)
-        canvas.drawCircle(line.ghostX, line.ghostY, 17f, ghostBorderPaint)
+        canvas.drawCircle(
+            line.ghostX,
+            line.ghostY,
+            18f,
+            ghostPaint
+        )
+
+        canvas.drawCircle(
+            line.ghostX,
+            line.ghostY,
+            18f,
+            ghostBorderPaint
+        )
+
+        canvas.drawCircle(
+            line.contactX,
+            line.contactY,
+            10f,
+            contactPaint
+        )
 
         canvas.drawLine(
             line.targetX,
             line.targetY,
             line.pocketX,
             line.pocketY,
-            pocketLinePaint
+            targetToPocketPaint
         )
     }
 }
@@ -524,8 +691,12 @@ class AimService : Service() {
     private var densityDpi = 0
 
     private var lastProcessTime = 0L
+    private var processing = false
 
-    private val handler = Handler(Looper.getMainLooper())
+    private val mainHandler = Handler(Looper.getMainLooper())
+
+    private lateinit var processingThread: HandlerThread
+    private lateinit var processingHandler: Handler
 
     private val projectionCallback = object : MediaProjection.Callback() {
         override fun onStop() {
@@ -536,8 +707,13 @@ class AimService : Service() {
 
     private val captureRunnable = object : Runnable {
         override fun run() {
-            captureAndProcess()
-            handler.postDelayed(this, 350L)
+            if (!processing) {
+                processingHandler.post {
+                    captureAndProcess()
+                }
+            }
+
+            mainHandler.postDelayed(this, 320L)
         }
     }
 
@@ -545,6 +721,10 @@ class AimService : Service() {
         super.onCreate()
 
         windowManager = getSystemService(WINDOW_SERVICE) as WindowManager
+
+        processingThread = HandlerThread("TacadinhaCoachProcessing")
+        processingThread.start()
+        processingHandler = Handler(processingThread.looper)
 
         val metrics = DisplayMetrics()
 
@@ -592,7 +772,7 @@ class AimService : Service() {
 
         mediaProjection?.registerCallback(
             projectionCallback,
-            handler
+            mainHandler
         )
 
         imageReader = ImageReader.newInstance(
@@ -603,18 +783,18 @@ class AimService : Service() {
         )
 
         virtualDisplay = mediaProjection?.createVirtualDisplay(
-            "TacadinhaAutoAimLight",
+            "TacadinhaCoachOverlay",
             screenW,
             screenH,
             densityDpi,
             DisplayManager.VIRTUAL_DISPLAY_FLAG_AUTO_MIRROR,
             imageReader?.surface,
             null,
-            handler
+            mainHandler
         )
 
         addOverlay()
-        handler.postDelayed(captureRunnable, 500L)
+        mainHandler.postDelayed(captureRunnable, 500L)
 
         return START_STICKY
     }
@@ -636,9 +816,9 @@ class AimService : Service() {
             WindowManager.LayoutParams.MATCH_PARENT,
             layoutType,
             WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
-                WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE or
-                WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or
-                WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
+                    WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE or
+                    WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or
+                    WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
             PixelFormat.TRANSLUCENT
         )
 
@@ -648,10 +828,12 @@ class AimService : Service() {
     private fun captureAndProcess() {
         val now = SystemClock.uptimeMillis()
 
-        if (now - lastProcessTime < 300L) return
+        if (now - lastProcessTime < 280L) return
         lastProcessTime = now
 
         val image = imageReader?.acquireLatestImage() ?: return
+
+        processing = true
 
         try {
             val plane = image.planes[0]
@@ -692,6 +874,8 @@ class AimService : Service() {
                 image.close()
             } catch (_: Exception) {
             }
+
+            processing = false
         }
     }
 
@@ -722,6 +906,7 @@ class AimService : Service() {
             full.recycle()
 
             val scale = 0.22f
+
             val smallW = (tableCrop.width * scale).toInt().coerceAtLeast(1)
             val smallH = (tableCrop.height * scale).toInt().coerceAtLeast(1)
 
@@ -761,23 +946,8 @@ class AimService : Service() {
                 bestLine = bestLine
             )
 
-            handler.post {
+            mainHandler.post {
                 overlayView?.update(aimData)
-            }
-
-            if (bestLine != null && bestLine.clear) {
-                val angle = kotlin.math.atan2(
-                    (bestLine.ghostY - bestLine.cueY).toDouble(),
-                    (bestLine.ghostX - bestLine.cueX).toDouble()
-                )
-
-                handler.post {
-                    AimAccessibilityService.instance?.aimCue(
-                        bestLine.cueX,
-                        bestLine.cueY,
-                        angle
-                    )
-                }
             }
 
             small.recycle()
@@ -796,8 +966,8 @@ class AimService : Service() {
 
     private fun buildNotification() =
         NotificationCompat.Builder(this, CHANNEL_ID)
-            .setContentTitle("Tacadinha Aim")
-            .setContentText("Analisando mesa e desenhando mira")
+            .setContentTitle("Tacadinha Coach")
+            .setContentText("Mostrando linha de sugestão por cima do jogo")
             .setSmallIcon(android.R.drawable.ic_menu_compass)
             .setPriority(NotificationCompat.PRIORITY_LOW)
             .build()
@@ -806,7 +976,7 @@ class AimService : Service() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             val channel = NotificationChannel(
                 CHANNEL_ID,
-                "Tacadinha Aim",
+                "Tacadinha Coach",
                 NotificationManager.IMPORTANCE_LOW
             )
 
@@ -816,7 +986,7 @@ class AimService : Service() {
     }
 
     override fun onDestroy() {
-        handler.removeCallbacks(captureRunnable)
+        mainHandler.removeCallbacks(captureRunnable)
 
         try {
             overlayView?.let {
@@ -852,6 +1022,11 @@ class AimService : Service() {
         }
 
         mediaProjection = null
+
+        try {
+            processingThread.quitSafely()
+        } catch (_: Exception) {
+        }
 
         super.onDestroy()
     }
