@@ -1,95 +1,121 @@
-package com.tacadinha.auto
+package com.tacadinha.aim
 
 import android.accessibilityservice.AccessibilityService
-import android.accessibilityservice.AccessibilityServiceInfo
 import android.accessibilityservice.GestureDescription
-import android.app.NotificationChannel
-import android.app.NotificationManager
+import android.content.Intent
 import android.graphics.Path
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import android.view.accessibility.AccessibilityEvent
-import androidx.core.app.NotificationCompat
 import kotlin.math.cos
 import kotlin.math.sin
 
 class AimAccessibilityService : AccessibilityService() {
 
     companion object {
+        @Volatile
         var instance: AimAccessibilityService? = null
-        const val CH = "tac_acc2"
-        const val NID = 98
+
+        private const val DRAG_LEN = 260f
+        private const val GESTURE_DURATION_MS = 130L
+        private const val MIN_GESTURE_INTERVAL_MS = 700L
     }
 
     private val handler = Handler(Looper.getMainLooper())
+    private var lastGestureTime = 0L
 
     override fun onServiceConnected() {
+        super.onServiceConnected()
         instance = this
-        val info = AccessibilityServiceInfo().apply {
-            eventTypes = AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED
-            feedbackType = AccessibilityServiceInfo.FEEDBACK_GENERIC
-            notificationTimeout = 100
-            flags = AccessibilityServiceInfo.FLAG_REQUEST_TOUCH_EXPLORATION_MODE
-        }
-        serviceInfo = info
-        keepAlive()
     }
 
-    private fun keepAlive() {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            val nm = getSystemService(NotificationManager::class.java)
-            if (nm.getNotificationChannel(CH) == null) {
-                nm.createNotificationChannel(
-                    NotificationChannel(CH, "Tacadinha Ativo", NotificationManager.IMPORTANCE_LOW)
-                )
-            }
-        }
-        val notif = NotificationCompat.Builder(this, CH)
-            .setContentTitle("Tacadinha Auto")
-            .setContentText("Servico ativo")
-            .setSmallIcon(android.R.drawable.ic_menu_compass)
-            .setPriority(NotificationCompat.PRIORITY_LOW)
-            .build()
-        try { startForeground(NID, notif) } catch (e: Exception) { e.printStackTrace() }
+    override fun onAccessibilityEvent(event: AccessibilityEvent?) {
+        // Não precisa ler eventos da tela.
     }
 
-    override fun onInterrupt() {}
-    override fun onAccessibilityEvent(e: AccessibilityEvent?) {}
-    override fun onDestroy() { instance = null; super.onDestroy() }
+    override fun onInterrupt() {
+        // Serviço interrompido pelo Android.
+    }
+
+    override fun onUnbind(intent: Intent?): Boolean {
+        if (instance === this) {
+            instance = null
+        }
+
+        return super.onUnbind(intent)
+    }
+
+    override fun onDestroy() {
+        if (instance === this) {
+            instance = null
+        }
+
+        super.onDestroy()
+    }
 
     fun aimCue(cueX: Float, cueY: Float, angleRad: Double) {
-        val cosA = cos(angleRad).toFloat()
-        val sinA = sin(angleRad).toFloat()
-        val dragLen = 220f
+        try {
+            if (Build.VERSION.SDK_INT < Build.VERSION_CODES.N) return
 
-        val startX = cueX - cosA * dragLen
-        val startY = cueY - sinA * dragLen
-        val endX   = cueX + cosA * dragLen
-        val endY   = cueY + sinA * dragLen
-
-        val path = Path().apply {
-            moveTo(startX, startY)
-            lineTo(endX, endY)
-        }
-
-        val stroke = GestureDescription.StrokeDescription(path, 0L, 350L)
-        val gesture = GestureDescription.Builder().addStroke(stroke).build()
-
-        dispatchGesture(gesture, object : GestureResultCallback() {
-            override fun onCompleted(g: GestureDescription) {
-                handler.postDelayed({
-                    val confirmPath = Path().apply {
-                        moveTo(startX + cosA * 20, startY + sinA * 20)
-                        lineTo(endX - cosA * 20, endY - sinA * 20)
-                    }
-                    val confirmGesture = GestureDescription.Builder()
-                        .addStroke(GestureDescription.StrokeDescription(confirmPath, 0L, 150L))
-                        .build()
-                    dispatchGesture(confirmGesture, null, null)
-                }, 100L)
+            if (!cueX.isFinite() || !cueY.isFinite() || angleRad.isNaN()) {
+                return
             }
-            override fun onCancelled(g: GestureDescription) {}
-        }, null)
+
+            val now = System.currentTimeMillis()
+
+            if (now - lastGestureTime < MIN_GESTURE_INTERVAL_MS) {
+                return
+            }
+
+            lastGestureTime = now
+
+            val cosA = cos(angleRad).toFloat()
+            val sinA = sin(angleRad).toFloat()
+
+            val startX = cueX - cosA * DRAG_LEN * 0.45f
+            val startY = cueY - sinA * DRAG_LEN * 0.45f
+
+            val endX = cueX + cosA * DRAG_LEN * 1.15f
+            val endY = cueY + sinA * DRAG_LEN * 1.15f
+
+            val path = Path().apply {
+                moveTo(startX, startY)
+                lineTo(endX, endY)
+            }
+
+            val gesture = GestureDescription.Builder()
+                .addStroke(
+                    GestureDescription.StrokeDescription(
+                        path,
+                        0L,
+                        GESTURE_DURATION_MS
+                    )
+                )
+                .build()
+
+            handler.post {
+                try {
+                    dispatchGesture(
+                        gesture,
+                        object : GestureResultCallback() {
+                            override fun onCompleted(gestureDescription: GestureDescription?) {
+                                super.onCompleted(gestureDescription)
+                            }
+
+                            override fun onCancelled(gestureDescription: GestureDescription?) {
+                                super.onCancelled(gestureDescription)
+                            }
+                        },
+                        null
+                    )
+                } catch (e: Exception) {
+                    e.printStackTrace()
+                }
+            }
+
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
     }
 }
